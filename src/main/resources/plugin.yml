@@ -1,0 +1,15 @@
+name: BadCourier
+version: 0.0.1
+main: io.github.managernotmoney.Badmain
+description: Дополнение к GreatWeeb – система закладок
+author: ManagerMoney
+api-version: "1.21"
+depend: [GreatWeeb]
+commands:
+  bc:
+    description: Система закладок
+    usage: /bc order
+permissions:
+  badcourier.use:
+    description: Доступ к командам /bc
+    default: op
