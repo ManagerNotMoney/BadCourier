@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "io.github.potaseval"
-version = "0.0.1"
+version = "0.0.3"
 
 repositories {
     mavenCentral()
@@ -11,7 +11,7 @@ repositories {
 }
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
-    compileOnly(files("libs/GreatWeeb-0.0.9.jar"))
+    compileOnly(files("libs/GreatWeeb-0.1.0.jar"))
 }
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))

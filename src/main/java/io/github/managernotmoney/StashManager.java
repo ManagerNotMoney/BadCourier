@@ -24,8 +24,12 @@ public class StashManager {
     private final Map<Location, Order> ordersByLocation;
     private final Map<UUID, Order> ordersByPlayer;
     private final Map<UUID, BukkitTask> orderTimers;
+    private List<OrderTemplate> allTemplates;
+    private List<OrderTemplate> reserveOffers;
     private List<OrderTemplate> currentOffers;
     private BukkitTask refreshTask;
+    private final OrderGenerator orderGenerator;
+    private final Map<UUID, List<OrderTemplate>> guiOffers = new HashMap<>();
 
     private int maxDistance = 1000;
     private int lifetimeMinutes = 6;
@@ -37,11 +41,17 @@ public class StashManager {
         this.ordersByLocation = new HashMap<>();
         this.ordersByPlayer = new HashMap<>();
         this.orderTimers = new HashMap<>();
+        this.orderGenerator = new OrderGenerator(corePlugin);
 
         plugin.saveDefaultConfig();
         maxDistance = plugin.getConfig().getInt("radius", 1000);
         lifetimeMinutes = plugin.getConfig().getInt("lifetime-minutes", 6);
 
+        allTemplates = new ArrayList<>();
+        reserveOffers = new ArrayList<>();
+        currentOffers = new ArrayList<>();
+
+        cleanupOrphanedBarrels();
         refreshOffers();
         refreshTask = new BukkitRunnable() {
             @Override
@@ -50,27 +60,77 @@ public class StashManager {
             }
         }.runTaskTimer(plugin, 20 * 60 * 20L, 20 * 60 * 20L);
     }
+
     private void refreshOffers() {
-        List<OrderTemplate> newOffers = new ArrayList<>();
-        for (int i = 0; i < 4; i++) {
-            newOffers.add(generateRandomOrder());
-        }
-        currentOffers = newOffers;
+        List<OrderTemplate> newTemplates = orderGenerator.generateOfferPool(8);
+        allTemplates = newTemplates;
+        Collections.shuffle(allTemplates);
+        currentOffers = new ArrayList<>(allTemplates.subList(0, 5));
+        reserveOffers = new ArrayList<>(allTemplates.subList(5, 8));
     }
+
+    public void storeGuiOffers(UUID playerId, List<OrderTemplate> offers) {
+        guiOffers.put(playerId, new ArrayList<>(offers));
+    }
+
+    public void removeGuiOffers(UUID playerId) {
+        guiOffers.remove(playerId);
+    }
+
     public List<OrderTemplate> getCurrentOffers() {
         return currentOffers;
     }
-    public Order acceptGlobalOffer(Player player, int index) {
-        if (currentOffers == null || index < 0 || index >= currentOffers.size()) return null;
-        OrderTemplate chosen = currentOffers.get(index);
-        currentOffers.remove(index);
-        return createOrder(player, chosen);
+
+    public boolean hasOpenGui(UUID playerId) {
+        return guiOffers.containsKey(playerId);
     }
-    private void returnOfferToPool(OrderTemplate template) {
-        if (template != null && currentOffers != null) {
-            currentOffers.add(template);
+
+    public Order acceptGlobalOffer(Player player, int index) {
+        List<OrderTemplate> playerOffers = guiOffers.get(player.getUniqueId());
+        if (playerOffers == null || index < 0 || index >= playerOffers.size()) {
+            return null;
+        }
+        OrderTemplate chosen = playerOffers.get(index);
+        if (currentOffers == null || !currentOffers.contains(chosen)) {
+            player.sendMessage("§cЭто предложение уже недоступно.");
+            guiOffers.remove(player.getUniqueId());
+            return null;
+        }
+        Order order = createOrder(player, chosen);
+        if (order != null) {
+            currentOffers.remove(chosen);
+            replenishActiveOffers();   // пополнить до 5 активных из резерва
+            guiOffers.remove(player.getUniqueId());
+        } else {
+            player.sendMessage("§cНе удалось создать заказ. Попробуйте позже.");
+            guiOffers.remove(player.getUniqueId());
+        }
+        return order;
+    }
+
+    private void replenishActiveOffers() {
+        while (currentOffers.size() < 5 && !reserveOffers.isEmpty()) {
+            OrderTemplate t = reserveOffers.remove(0);
+            if (!currentOffers.contains(t)) {
+                currentOffers.add(t);
+            }
         }
     }
+
+    private void returnOfferToPool(OrderTemplate template) {
+        if (allTemplates == null || !allTemplates.contains(template)) {
+            return; // шаблон не из текущего набора – игнорируем
+        }
+        if (!currentOffers.contains(template)) {
+            if (currentOffers.size() < 5) {
+                currentOffers.add(template);
+            } else if (!reserveOffers.contains(template)) {
+                reserveOffers.add(template);
+            }
+        }
+        replenishActiveOffers();
+    }
+
     private Order createOrder(Player player, OrderTemplate template) {
         if (ordersByPlayer.containsKey(player.getUniqueId())) {
             player.sendMessage("§cУ вас уже есть активный заказ. Сначала отмените его.");
@@ -119,7 +179,6 @@ public class StashManager {
         return order;
     }
 
-    // Оставшееся время в секундах (для /bc status)
     public long getRemainingTime(Player player) {
         Order order = ordersByPlayer.get(player.getUniqueId());
         if (order == null) return -1;
@@ -138,7 +197,7 @@ public class StashManager {
                     cancelOrderByPlayerId(playerId);
                 }
             }
-        }.runTaskLater(plugin, 6 * 60 * 20L); // 6 минут
+        }.runTaskLater(plugin, lifetimeMinutes * 60 * 20L);
         orderTimers.put(playerId, task);
     }
 
@@ -212,11 +271,7 @@ public class StashManager {
                     if (item.getAmount() == 0) {
                         inv.clear(i);
                     }
-
-                    // Выбрасываем все оставшиеся предметы из инвентаря
                     dropAllItems(barrelLocation, inv);
-
-                    // Выполняем заказ (бочка удаляется, выдаётся награда)
                     completeOrder(order, player);
                     return true;
                 }
@@ -240,8 +295,7 @@ public class StashManager {
             block.setType(order.getOriginalMaterial());
         }
 
-        returnOfferToPool(order.getTemplate());   // <-- возвращаем шаблон
-
+        returnOfferToPool(order.getTemplate());
         player.sendMessage("§eВаш заказ отменён.");
         return true;
     }
@@ -278,24 +332,19 @@ public class StashManager {
         ordersByPlayer.clear();
     }
 
-    // ---------- внутренние методы ----------
-
     private void completeOrder(Order order, Player player) {
         cancelTimer(order.getPlayerId());
         Location loc = order.getBarrelLocation();
         World world = loc.getWorld();
 
-        // Удаляем бочку и восстанавливаем исходный блок
         loc.getBlock().setType(order.getOriginalMaterial());
 
         OrderTemplate template = order.getTemplate();
 
-        // Выдаём предметную награду, если есть
         if (template.getReward() != null) {
             world.dropItemNaturally(loc.clone().add(0.5, 0.5, 0.5), template.getReward().clone());
         }
 
-        // Выдаём денежную награду, если есть
         if (template.getMoneyReward() > 0) {
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
                     "eco give " + player.getName() + " " + template.getMoneyReward());
@@ -337,76 +386,6 @@ public class StashManager {
         }
         return null;
     }
-
-    private OrderTemplate generateRandomOrder() {
-        ThreadLocalRandom rand = ThreadLocalRandom.current();
-        int itemType = rand.nextInt(6);
-
-        ItemStack required;
-        String itemName;
-        boolean isBoshka;
-        boolean isPack = false;
-
-        switch (itemType) {
-            case 0 -> { required = corePlugin.getSativaItems().createBoshka(); itemName = "сативы"; isBoshka = true; }
-            case 1 -> { required = corePlugin.getIndicaItems().createBoshka(); itemName = "индики"; isBoshka = true; }
-            case 2 -> { required = corePlugin.getSativaItems().createBriquette(); itemName = "сативы"; isBoshka = false; }
-            case 3 -> { required = corePlugin.getIndicaItems().createBriquette(); itemName = "индики"; isBoshka = false; }
-            case 4 -> { required = corePlugin.getSativaItems().createPack(); itemName = "сативы"; isBoshka = false; isPack = true; }
-            case 5 -> { required = corePlugin.getIndicaItems().createPack(); itemName = "индики"; isBoshka = false; isPack = true; }
-            default -> throw new IllegalStateException();
-        }
-
-        int amount;
-        double moneyReward = 0;
-        ItemStack reward = null;
-        String desc, rewardDesc;
-
-        if (isBoshka) {
-            int currencyType = rand.nextInt(2);
-            if (currencyType == 0) {  // франки
-                amount = rand.nextInt(5, 21);       // 5-20 бошек
-                int perPiece = rand.nextInt(2, 5);  // 2-4 франка за штуку (исправлено, было 1-2)
-                moneyReward = amount * perPiece;
-                desc = amount + " бошек " + itemName + " за " + (int) moneyReward + " франков (по " + perPiece + " за штуку)";
-                rewardDesc = (int) moneyReward + " франков";
-            } else {                  // алмазы
-                amount = rand.nextInt(1, 6);        // 1-5 бошек
-                int perPiece = rand.nextInt(1, 3);  // 1-2 алмаза за штуку (исправлено)
-                int totalDiamonds = amount * perPiece;
-                reward = new ItemStack(Material.DIAMOND, totalDiamonds);
-                desc = amount + " бошек " + itemName + " за " + totalDiamonds + " алмазов (по " + perPiece + " за штуку)";
-                rewardDesc = totalDiamonds + " алмазов";
-            }
-        } else if (isPack) {
-            // Паки - только франки, цены не трогали
-            amount = rand.nextInt(5, 16);          // 5-15 паков
-            int perPiece = rand.nextInt(12, 22);  // 12-21 франков за штуку
-            moneyReward = amount * perPiece;
-            desc = amount + " паков " + itemName + " за " + (int) moneyReward + " франков (по " + perPiece + " за штуку)";
-            rewardDesc = (int) moneyReward + " франков";
-        } else {
-            // Брикеты (алмазы или франки)
-            int currencyType = rand.nextInt(2);
-            if (currencyType == 0) {  // франки
-                amount = rand.nextInt(3, 31);       // 3-30 брикетов
-                int perPiece = rand.nextInt(7, 12); // 7-11 франков за штуку
-                moneyReward = amount * perPiece;
-                desc = amount + " брикетов " + itemName + " за " + (int) moneyReward + " франков (по " + perPiece + " за штуку)";
-                rewardDesc = (int) moneyReward + " франков";
-            } else {                  // алмазы
-                amount = rand.nextInt(1, 4);        // 1-3 брикета
-                int perPiece = rand.nextInt(3, 5);  // 3-4 алмаза за штуку (правильно)
-                int totalDiamonds = amount * perPiece;
-                reward = new ItemStack(Material.DIAMOND, totalDiamonds);
-                desc = amount + " брикетов " + itemName + " за " + totalDiamonds + " алмазов (по " + perPiece + " за штуку)";
-                rewardDesc = totalDiamonds + " алмазов";
-            }
-        }
-        required.setAmount(amount);
-        return new OrderTemplate(required, reward, desc, rewardDesc, moneyReward);
-    }
-
     public static class Order {
         private final String id;
         private final UUID playerId;
@@ -449,13 +428,9 @@ public class StashManager {
             return originalMaterial;
         }
     }
-    public List<OrderTemplate> generateOfferList(int count) {
-        List<OrderTemplate> offers = new ArrayList<>();
-        for (int i = 0; i < count; i++) {
-            offers.add(generateRandomOrder());
-        }
-        return offers;
-    }
+
+    public List<OrderTemplate> generateOfferList(int count) { return orderGenerator.generateOfferPool(count); }
+
     public static class OrderTemplate {
         private final ItemStack requiredItem;
         private final ItemStack reward;
@@ -488,6 +463,7 @@ public class StashManager {
         public ItemStack getReward() {
             return reward != null ? reward.clone() : null;
         }
+
         public double getMoneyReward() {
             return moneyReward;
         }
@@ -508,7 +484,40 @@ public class StashManager {
                 return item.getAmount() >= requiredItem.getAmount();
             if (corePlugin.getGashItems().isGash(requiredItem) && corePlugin.getGashItems().isGash(item))
                 return item.getAmount() >= requiredItem.getAmount();
+            if (corePlugin.getGashItems().isSpice(requiredItem) && corePlugin.getGashItems().isSpice(item))
+                return item.getAmount() >= requiredItem.getAmount();
+            if (corePlugin.getGashItems().isSpiceBriquette(requiredItem) && corePlugin.getGashItems().isSpiceBriquette(item))
+                return item.getAmount() >= requiredItem.getAmount();
+            if (corePlugin.getGashItems().isSpicePack(requiredItem) && corePlugin.getGashItems().isSpicePack(item))
+                return item.getAmount() >= requiredItem.getAmount();
+            if (corePlugin.getGashItems().isGashBriquette(requiredItem) && corePlugin.getGashItems().isGashBriquette(item))
+                return item.getAmount() >= requiredItem.getAmount();
+            if (corePlugin.getGashItems().isGashPack(requiredItem) && corePlugin.getGashItems().isGashPack(item))
+                return item.getAmount() >= requiredItem.getAmount();
             return false;
         }
+    }
+
+    public void cleanupOrphanedBarrels() {
+        for (World world : Bukkit.getWorlds()) {
+            for (org.bukkit.Chunk chunk : world.getLoadedChunks()) {
+                for (org.bukkit.block.BlockState state : chunk.getTileEntities()) {
+                    if (state instanceof org.bukkit.block.Barrel barrel) {
+                        if (barrel.getPersistentDataContainer().has(orderKey, PersistentDataType.STRING)) {
+                            Location loc = barrel.getLocation();
+                            if (barrel instanceof Container container) {
+                                dropAllItems(loc, container.getInventory());
+                            }
+                            loc.getBlock().setType(Material.AIR);
+                            plugin.getLogger().info("[BadCourier] Удалена осиротевшая бочка на " +
+                                    loc.getBlockX() + ", " + loc.getBlockY() + ", " + loc.getBlockZ());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    public void restockOffers() {
+        refreshOffers();
     }
 }

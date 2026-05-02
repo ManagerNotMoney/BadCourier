@@ -56,6 +56,14 @@ public class StashCommand implements CommandExecutor, TabCompleter {
             }
             case "status" -> showStatus(player);
             default -> showHelp(player);
+            case "restock" -> {
+                if (!player.isOp()) {
+                    player.sendMessage("§cУ вас недостаточно прав.");
+                    return true;
+                }
+                stashManager.restockOffers();
+                player.sendMessage("§aПредложения обновлены.");
+            }
         }
         return true;
     }
@@ -64,39 +72,45 @@ public class StashCommand implements CommandExecutor, TabCompleter {
             player.sendMessage("§cУ вас уже есть активный заказ. Сначала отмените его: /bc cancel");
             return;
         }
+        if (stashManager.hasOpenGui(player.getUniqueId())) {
+            player.sendMessage("§cУ вас уже открыто меню выбора заказа.");
+            return;
+        }
+
         List<StashManager.OrderTemplate> offers = stashManager.getCurrentOffers();
         if (offers == null || offers.isEmpty()) {
             player.sendMessage("§cПредложения временно недоступны. Попробуйте позже.");
             return;
         }
+
         Inventory inv = Bukkit.createInventory(null, 27, "Выберите заказ");
+
         ItemStack pane = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
-        for (int i = 0; i < 27; i++) inv.setItem(i, pane);
-        int[] slots;
-        int size = offers.size();
-        switch (size) {
-            case 1 -> slots = new int[]{13};
-            case 2 -> slots = new int[]{12, 14};
-            case 3 -> slots = new int[]{11, 13, 15};
-            default -> slots = new int[]{10, 12, 14, 16}; // 4
+        for (int i = 0; i < 27; i++) {
+            inv.setItem(i, pane);
         }
-        for (int i = 0; i < size; i++) {
-            StashManager.OrderTemplate offer = offers.get(i);
-            ItemStack displayItem = offer.getRequiredItem().clone();
-            ItemMeta meta = displayItem.getItemMeta();
-            List<String> lore = new ArrayList<>();
-            lore.add("§7Требуется: " + offer.getDescription());
-            if (offer.getMoneyReward() > 0) {
-                lore.add("§7Награда: §6" + (int) offer.getMoneyReward() + " франков");
-            } else if (offer.getReward() != null) {
-                lore.add("§7Награда: " + offer.getRewardDescription());
+
+        int[] offerSlots = {11, 12, 13, 14, 15};
+        for (int i = 0; i < offerSlots.length; i++) {
+            if (i < offers.size()) {
+                StashManager.OrderTemplate offer = offers.get(i);
+                ItemStack displayItem = offer.getRequiredItem().clone();
+                ItemMeta meta = displayItem.getItemMeta();
+                List<String> lore = new ArrayList<>();
+                lore.add("§7Требуется: " + offer.getDescription());
+                if (offer.getMoneyReward() > 0) {
+                    lore.add("§7Награда: §6" + String.format("%.2f", offer.getMoneyReward()) + " франков");
+                } else if (offer.getReward() != null) {
+                    lore.add("§7Награда: " + offer.getRewardDescription());
+                }
+                lore.add("§eНажмите, чтобы принять");
+                meta.setLore(lore);
+                meta.getPersistentDataContainer().set(OFFER_INDEX_KEY, PersistentDataType.INTEGER, i);
+                displayItem.setItemMeta(meta);
+                inv.setItem(offerSlots[i], displayItem);
             }
-            lore.add("§eНажмите, чтобы принять");
-            meta.setLore(lore);
-            meta.getPersistentDataContainer().set(OFFER_INDEX_KEY, PersistentDataType.INTEGER, i);
-            displayItem.setItemMeta(meta);
-            inv.setItem(slots[i], displayItem);
         }
+        stashManager.storeGuiOffers(player.getUniqueId(), new ArrayList<>(offers));
         player.openInventory(inv);
     }
     private void showStatus(Player player) {
@@ -128,6 +142,7 @@ public class StashCommand implements CommandExecutor, TabCompleter {
         player.sendMessage("§7/bc order §8- §7получить новый заказ");
         player.sendMessage("§7/bc cancel §8- §7отменить текущий заказ");
         player.sendMessage("§7/bc status §8- §7показать информацию о заказе");
+        player.sendMessage("§7/bc restock §8- §7обновить список предложений");
         player.sendMessage("§7/bc help §8- §7эта справка");
     }
 
@@ -142,6 +157,7 @@ public class StashCommand implements CommandExecutor, TabCompleter {
             options.add("order");
             options.add("cancel");
             options.add("status");
+            options.add("restock");
             options.add("help");
             return filterStarting(options, args[0]);
         }

@@ -43,7 +43,12 @@ public class StashListener implements Listener {
         event.setCancelled(true);
         stashManager.cancelOrderByLocation(block.getLocation());
     }
-
+    @EventHandler
+    public void onGuiClose(InventoryCloseEvent event) {
+        if (!event.getView().getTitle().equals("Выберите заказ")) return;
+        Player player = (Player) event.getPlayer();
+        stashManager.removeGuiOffers(player.getUniqueId());
+    }
     @EventHandler
     public void onRightClick(PlayerInteractEvent event) {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK) return;

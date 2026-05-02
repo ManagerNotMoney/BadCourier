@@ -27,7 +27,7 @@ public final class Badmain extends JavaPlugin {
                 corePlugin.getDescription().getVersion());
 
         stashManager = new StashManager(this, corePlugin);
-
+        stashManager.cleanupOrphanedBarrels();
         StashCommand stashCommand = new StashCommand(this, stashManager);
         getCommand("bc").setExecutor(stashCommand);
         getCommand("bc").setTabCompleter(stashCommand);
