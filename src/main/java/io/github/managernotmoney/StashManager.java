@@ -12,6 +12,7 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
+import net.milkbowl.vault.economy.Economy;
 
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
@@ -30,11 +31,12 @@ public class StashManager {
     private BukkitTask refreshTask;
     private final OrderGenerator orderGenerator;
     private final Map<UUID, List<OrderTemplate>> guiOffers = new HashMap<>();
+    private final Economy economy;
 
     private int maxDistance = 1000;
     private int lifetimeMinutes = 6;
 
-    public StashManager(JavaPlugin plugin, GreatWeeb corePlugin) {
+    public StashManager(JavaPlugin plugin, GreatWeeb corePlugin, Economy economy) {
         this.plugin = plugin;
         this.corePlugin = corePlugin;
         this.orderKey = new NamespacedKey(plugin, "stash_order");
@@ -42,6 +44,7 @@ public class StashManager {
         this.ordersByPlayer = new HashMap<>();
         this.orderTimers = new HashMap<>();
         this.orderGenerator = new OrderGenerator(corePlugin);
+        this.economy = economy;
 
         plugin.saveDefaultConfig();
         maxDistance = plugin.getConfig().getInt("radius", 1000);
@@ -345,11 +348,13 @@ public class StashManager {
             world.dropItemNaturally(loc.clone().add(0.5, 0.5, 0.5), template.getReward().clone());
         }
 
-        if (template.getMoneyReward() > 0) {
+        double money = template.getMoneyReward();
+        if (money > 0 && economy != null) {
+            economy.depositPlayer(player, money);
+        } else if (money > 0 && economy == null) {
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(),
-                    "eco give " + player.getName() + " " + template.getMoneyReward());
+                    "eco give " + player.getName() + " " + money);
         }
-
         world.playSound(loc, Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
         player.sendMessage("§aЗаказ выполнен! Вы получили: §e" + template.getRewardDescription());
 
