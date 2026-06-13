@@ -32,11 +32,11 @@ public final class Badmain extends JavaPlugin {
         }
         stashManager = new StashManager(this, corePlugin, economy);
         stashManager.cleanupOrphanedBarrels();
-        StashCommand stashCommand = new StashCommand(this, stashManager);
+        StashCommand stashCommand = new StashCommand(this, stashManager, economy, corePlugin);
         getCommand("bc").setExecutor(stashCommand);
         getCommand("bc").setTabCompleter(stashCommand);
 
-        getServer().getPluginManager().registerEvents(new StashListener(stashManager), this);
+        getServer().getPluginManager().registerEvents(new StashListener(stashManager, stashCommand), this);
     }
     private boolean setupEconomy() {
         if (getServer().getPluginManager().getPlugin("Vault") == null) {

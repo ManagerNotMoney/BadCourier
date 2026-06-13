@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "io.github.potaseval"
-version = "0.0.4"
+version = "0.0.7"
 
 repositories {
     mavenCentral()
@@ -12,7 +12,7 @@ repositories {
 }
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
-    compileOnly(files("libs/GreatWeeb-0.1.0.jar"))
+    compileOnly(files("libs/GreatWeeb-0.1.2.jar"))
     compileOnly("com.github.MilkBowl:VaultAPI:1.7") {
         exclude("org.bukkit", "bukkit")
     }

@@ -1,5 +1,5 @@
 name: BadCourier
-version: 0.0.4
+version: "0.0.7"
 main: io.github.managernotmoney.Badmain
 description: Дополнение к GreatWeeb – система закладок
 author: ManagerMoney
